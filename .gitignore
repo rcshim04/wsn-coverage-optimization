@@ -10,3 +10,6 @@ LEARNING_NOTES.md
 *.egg-info/
 build/
 dist/
+
+# Report figures are kept under version control
+!results/figures/*.png
