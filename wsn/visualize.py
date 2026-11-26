@@ -68,17 +68,20 @@ def plot_cost_map(cfg: Config, path: str):
     cb = fig.colorbar(im, ax=ax, shrink=0.9)
     cb.set_label("installation cost k(s)  [cost units]")
     for j, (mx, my, a, s) in enumerate(cfg.terrain_regions, 1):
-        ax.plot(mx, my, "+", color=TEXT, ms=8, mew=1.2)
+        ax.plot(mx, my, "+", color=TEXT, ms=8, mew=1.2,
+                label="terrain region centre μ_j" if j == 1 else None)
         ax.annotate(f"region {j}\na={a}, σ={s}", (mx, my), xytext=(6, 6),
                     textcoords="offset points", fontsize=7.5, color=TEXT)
-    ax.plot(*cfg.base_station, marker="s", color=TEXT, ms=8, ls="")
+    ax.plot(*cfg.base_station, marker="s", color=TEXT, ms=8, ls="", label="base station b")
     ax.annotate("base station b", cfg.base_station, xytext=(8, -12),
                 textcoords="offset points", fontsize=8)
     imax = np.unravel_index(np.argmax(k), k.shape)
     ax.set_title(f"Synthetic deployment cost map  (k_max = {problem.k_max:.3f}, "
                  f"k(b) = {sensor_costs(problem.base_station[None], cfg)[0]:.3f})")
-    ax.plot(gx[imax], gy[imax], marker="*", color=TEXT, ms=9, ls="")
+    ax.plot(gx[imax], gy[imax], marker="*", color=TEXT, ms=9, ls="",
+            label=f"maximum cost k_max ({gx[imax]:.2f}, {gy[imax]:.2f})")
     ax.set_xlabel("x"), ax.set_ylabel("y"), ax.set_aspect("equal"), ax.grid(False)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=2, fontsize=7.5)
     return _save(fig, path)
 
 
