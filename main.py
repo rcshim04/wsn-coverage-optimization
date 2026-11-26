@@ -1,156 +1,106 @@
-"""End-to-end pipeline: run PSO vs SQP, produce maps, curves, and a table.
+"""Run the PSO vs SQP experiments from the technical report (Section 3.3).
 
-Usage
------
-    python main.py                 # default config
-    python main.py --starts 10     # more random restarts
-    python main.py --sensors 10 --grid 50 --out outputs
+Examples
+--------
+    python main.py                                  # baseline only (N=10, alpha=0.7, seeds 0-7)
+    python main.py --experiments all --workers 8    # baseline + N sweep + alpha sweep
+    python main.py --quick                          # fast smoke run (reduced iterations)
+    python main.py --experiments baseline nsweep budget --workers 8
+    python main.py --figures-only --out results     # re-plot from saved CSVs
 
-Artifacts written to the output directory:
-    comparison_table.png        summary metrics for all methods
-    best_convergence.png        best-run convergence curves (PSO vs SQP)
-    seed_spread.png             coverage spread across random starts
-    nsensors_sweep.png          mean coverage vs number of sensors
-    layout_<method>.png         best layout + coverage map + comm edges
+Results go to <out>/ (CSV + config.json) and <out>/figures/ (PNG).
 """
 
 from __future__ import annotations
 
-import argparse
 import os
-import sys
-import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# One BLAS thread per process: keeps per-run timings comparable when runs are
+# executed in parallel worker processes. Must be set before numpy is imported.
+for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ.setdefault(_v, "1")
 
-from wsn.config import DEFAULT_CONFIG, Config
-from wsn.experiment import (
-    format_summary_table,
-    run_experiment,
-    sweep_initial_conditions,
-    sweep_parameter,
-)
-from wsn.problem import build_problem
-from wsn.visualize import (
-    plot_best_convergence,
-    plot_comparison_table,
-    plot_coverage_map,
-    plot_parameter_sweep,
-    plot_seed_spread,
-)
+import argparse  # noqa: E402
+import json  # noqa: E402
+import time  # noqa: E402
+from dataclasses import asdict  # noqa: E402
+
+from wsn.config import DEFAULT_CONFIG  # noqa: E402
+from wsn.experiment import read_csv, run_experiments, save_results  # noqa: E402
+from wsn.problem import build_problem  # noqa: E402
+from wsn.visualize import make_all_figures  # noqa: E402
+
+ALL = ("baseline", "nsweep", "alphasweep", "budget")
 
 
 def parse_args(argv=None):
-    p = argparse.ArgumentParser(description="WSN coverage: PSO vs SQP comparison")
-    p.add_argument("--sensors", type=int, default=DEFAULT_CONFIG.n_sensors)
-    p.add_argument("--grid", type=int, default=DEFAULT_CONFIG.grid_resolution)
-    p.add_argument("--starts", type=int, default=DEFAULT_CONFIG.n_starts)
-    p.add_argument("--rs", type=float, default=DEFAULT_CONFIG.sensing_radius)
-    p.add_argument("--rc", type=float, default=DEFAULT_CONFIG.comm_radius)
-    p.add_argument("--seed", type=int, default=DEFAULT_CONFIG.seed)
-    p.add_argument("--out", type=str, default=DEFAULT_CONFIG.output_dir)
-    p.add_argument(
-        "--quick",
-        action="store_true",
-        help="smaller/faster settings for a fast end-to-end smoke run",
-    )
-    p.add_argument(
-        "--skip-sweep",
-        action="store_true",
-        help="skip the parameter sweep (the slowest stage)",
-    )
-    a = p.parse_args(argv)
+    p = argparse.ArgumentParser(description="WSN coverage-cost placement: PSO vs SQP")
+    p.add_argument("--experiments", nargs="+", default=["baseline"],
+                   choices=[*ALL, "all"], help="which experiments to run (default: baseline)")
+    p.add_argument("--seeds", type=int, nargs="+", default=None,
+                   help="override seeds (default 0..7 from config)")
+    p.add_argument("--workers", type=int, default=1,
+                   help="parallel worker processes (timings are per run; default 1)")
+    p.add_argument("--out", default=DEFAULT_CONFIG.output_dir)
+    p.add_argument("--quick", action="store_true",
+                   help="smoke run: 2 seeds, N in (5,10), alpha in (0.5,0.7), reduced iterations "
+                        "(NOT the report's parameters)")
+    p.add_argument("--figures-only", action="store_true", help="re-plot from existing CSVs")
+    return p.parse_args(argv)
 
-    cfg = DEFAULT_CONFIG.with_overrides(
-        n_sensors=a.sensors,
-        grid_resolution=a.grid,
-        n_starts=a.starts,
-        sensing_radius=a.rs,
-        comm_radius=a.rc,
-        seed=a.seed,
-        output_dir=a.out,
-    )
+
+def main(argv=None):
+    a = parse_args(argv)
+    cfg = DEFAULT_CONFIG.with_overrides(output_dir=a.out)
+    if a.seeds is not None:
+        cfg = cfg.with_overrides(seeds=tuple(a.seeds))
     if a.quick:
-        cfg = cfg.with_overrides(
-            grid_resolution=min(cfg.grid_resolution, 20),
-            pso_swarm_size=15,
-            pso_iterations=25,
-            beta_schedule=(2.0, 8.0, 25.0),
-            sqp_max_iter=60,
-            n_starts=min(cfg.n_starts, 4),
-        )
-    cfg.validate()
-    return cfg, a.skip_sweep
+        cfg = cfg.with_overrides(seeds=cfg.seeds[:2], n_values=(5, 10), alpha_values=(0.5, 0.7),
+                                 budget_values=(1.4, 1.8), pso_swarm_size=20, pso_iterations=40,
+                                 sqp_max_iter=60)
+    experiments = ALL if "all" in a.experiments else tuple(a.experiments)
+    fig_dir = os.path.join(a.out, "figures")
+
+    if a.figures_only:
+        res = {k: read_csv(os.path.join(a.out, f"{f}.csv")) for k, f in
+               [("runs", "runs"), ("summary", "summary"), ("history", "history"),
+                ("stages", "sqp_stages"), ("positions", "positions")]}
+    else:
+        problem = build_problem(cfg)
+        print(f"N={cfg.n_sensors} alpha={cfg.alpha} |P|={len(problem.points)} r_s={cfg.sensing_radius} "
+              f"r_c={cfg.comm_radius} r_c_eff={cfg.comm_radius_eff} k_max={problem.k_max:.4f} "
+              f"B(N)={cfg.budget_per_sensor}N seeds={list(cfg.seeds)} experiments={list(experiments)}")
+        t0 = time.perf_counter()
+        res = run_experiments(cfg, experiments, workers=a.workers)
+        os.makedirs(a.out, exist_ok=True)
+        with open(os.path.join(a.out, "config.json"), "w") as f:
+            json.dump({**asdict(cfg), "k_max": problem.k_max, "experiments": list(experiments),
+                       "workers": a.workers, "quick": a.quick}, f, indent=2)
+        for pth in save_results(res, a.out):
+            print("wrote", pth)
+        print(f"experiments finished in {time.perf_counter() - t0:.1f}s")
+
+    print_summary(res["summary"])
+    for pth in make_all_figures(cfg, res, fig_dir):
+        print("wrote", pth)
 
 
-def main(argv=None) -> None:
-    cfg, skip_sweep = parse_args(argv)
-    os.makedirs(cfg.output_dir, exist_ok=True)
-    problem = build_problem(cfg)
-
-    print("=" * 72)
-    print("WSN Area Coverage under Connectivity  —  PSO vs SQP")
-    print("=" * 72)
-    print(
-        f"N={cfg.n_sensors}  |P|={cfg.n_points}  rs={cfg.sensing_radius}  "
-        f"rc={cfg.comm_radius}  starts={cfg.n_starts}  seed={cfg.seed}"
-    )
-    print("-" * 72)
-
-    # 1) Multi-start comparison -------------------------------------------
-    t0 = time.perf_counter()
-    summaries = run_experiment(cfg)
-    print(format_summary_table(summaries))
-    print("-" * 72)
-
-    table_path = os.path.join(cfg.output_dir, "comparison_table.png")
-    conv_path = os.path.join(cfg.output_dir, "best_convergence.png")
-    plot_comparison_table(summaries, save_path=table_path)
-    plot_best_convergence(summaries, save_path=conv_path)
-
-    # 2) Best layout per method -------------------------------------------
-    layout_paths = []
-    for method, s in summaries.items():
-        br = s.best_record
-        fname = f"layout_{method.replace('-', '_')}.png"
-        path = os.path.join(cfg.output_dir, fname)
-        plot_coverage_map(
-            problem,
-            br.layout,
-            title=f"{method} best (C={br.coverage:.3f}, connected={br.connected})",
-            show_edges=True,
-            save_path=path,
-        )
-        layout_paths.append(path)
-
-    # 3) Sensitivity to initial conditions --------------------------------
-    spread = sweep_initial_conditions(cfg)
-    spread_path = os.path.join(cfg.output_dir, "seed_spread.png")
-    plot_seed_spread(spread, save_path=spread_path)
-
-    # 4) Parameter sweep (number of sensors) ------------------------------
-    sweep_path = None
-    if not skip_sweep:
-        sweep_cfg = cfg.with_overrides(n_starts=max(3, cfg.n_starts // 2))
-        n_values = sorted({max(3, cfg.n_sensors - 2), cfg.n_sensors, cfg.n_sensors + 2})
-        points = sweep_parameter("n_sensors", n_values, base_config=sweep_cfg)
-        sweep_path = os.path.join(cfg.output_dir, "nsensors_sweep.png")
-        plot_parameter_sweep(
-            points,
-            metric="mean_coverage",
-            title="Mean coverage vs number of sensors",
-            save_path=sweep_path,
-        )
-
-    elapsed = time.perf_counter() - t0
-    print("Artifacts written:")
-    for pth in [table_path, conv_path, *layout_paths, spread_path]:
-        if pth:
-            print(f"  {pth}")
-    if sweep_path:
-        print(f"  {sweep_path}")
-    print(f"Total pipeline time: {elapsed:.1f}s")
-
+def print_summary(summary):
+    hdr = (f"{'method':<6}{'N':>4}{'alpha':>6}{'b':>5}{'feas':>7}{'J_feas mean+-sd':>20}{'C_feas':>8}"
+           f"{'K_feas':>8}{'B act/near':>11}{'time(s)':>9}{'obj evals':>10}{'conv':>6}  SQP selected beta")
+    print(hdr), print("-" * len(hdr))
+    for r in summary:
+        J = (f"{r['objective_feas_mean']:+.4f}+-{r['objective_feas_std']:.4f}"
+             if r["n_feasible"] else "   (none feasible)")
+        C = f"{r['coverage_feas_mean']:.3f}" if r["n_feasible"] else "-"
+        K = f"{r['cost_norm_feas_mean']:.3f}" if r["n_feasible"] else "-"
+        print(f"{r['method']:<6}{r['N']:>4}{r['alpha']:>6g}{r['budget_per_sensor']:>5g}"
+              f"{r['n_feasible']:>4}/{r['n_runs']:<2}{J:>20}{C:>8}{K:>8}"
+              f"{r['n_budget_active']:>7}/{r['n_budget_near']:<3}{r['time_sec_mean']:>9.2f}"
+              f"{r['n_obj_evals_mean']:>10.0f}{r['n_solver_success']:>4}/{r['n_runs']}"
+              f"  {r.get('sqp_selected_beta_counts', '')}")
+    print("feas = feasible under the original model (reported solution); B act/near = budget active / "
+          "within 2%; conv = PSO: found a feasible layout, SQP: FINAL SLSQP stage reported success")
 
 if __name__ == "__main__":
     main()
