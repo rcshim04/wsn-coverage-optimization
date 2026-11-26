@@ -52,10 +52,11 @@ connectivity with r_c = 1.8 using separately written code: SciPy
 where no feasible solution was found, and prints feasibility, J mean/sd/range,
 and runtime per configuration over the seeds.
 
-`--workers` runs independent (N, α, method, seed) runs in parallel processes.
-Each process is pinned to one BLAS thread, and times are measured per run inside
-the worker. With heavy parallelism, absolute times are somewhat inflated by
-contention, but PSO and SQP are affected alike.
+`--workers` runs independent (N, α, b, method, seed) runs in parallel processes,
+each pinned to one BLAS thread. Each run records wall time (`time_sec`) and
+process CPU time (`cpu_sec`). Under parallel load, wall time can be inflated by
+waiting for a free core: in the full run, SQP at N=10 averaged 55 s wall vs 23 s
+CPU. Summaries, the console table, and the time figures therefore use **CPU time**.
 
 ## Parameters (report Section 3)
 

@@ -226,7 +226,7 @@ def plot_baseline_comparison(runs, n, alpha, path):
     rs = _sel(runs, N=n, alpha=alpha)
     fig, axes = plt.subplots(1, 4, figsize=(13, 3.6))
     for ax, (key, lab) in zip(axes, [("coverage", "coverage C(S)"), ("cost_norm", "normalized cost K(S)"),
-                                     ("objective", "objective J(S)"), ("time_sec", "wall time [s]")]):
+                                     ("objective", "objective J(S)"), ("cpu_sec", "CPU time per run [s]")]):
         _strip(ax, rs, key)
         ax.set_title(lab)
     axes[3].set_yscale("log")
@@ -258,10 +258,10 @@ def plot_time_vs_n(summary, alpha, path):
     fig, axes = plt.subplots(1, 2, figsize=(10, 3.8))
     for m, rows in d.items():
         x = [r["N"] for r in rows]
-        axes[0].errorbar(x, [r["time_sec_mean"] for r in rows], yerr=[r["time_sec_std"] for r in rows],
+        axes[0].errorbar(x, [r["cpu_sec_mean"] for r in rows], yerr=[r["cpu_sec_std"] for r in rows],
                          color=COLORS[m], marker="o", ms=5, capsize=3, label=m)
         axes[1].plot(x, [r["n_obj_evals_mean"] for r in rows], color=COLORS[m], marker="o", ms=5, label=m)
-    axes[0].set_yscale("log"), axes[0].set_title("wall-clock time per run (mean ± sd)")
+    axes[0].set_yscale("log"), axes[0].set_title("CPU time per run (mean ± sd)")
     axes[0].set_ylabel("seconds"), axes[0].set_xlabel("number of sensors N (2N variables)")
     axes[1].set_yscale("log"), axes[1].set_title("objective-function evaluations per run (mean)")
     axes[1].set_xlabel("number of sensors N")

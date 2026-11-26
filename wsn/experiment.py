@@ -244,6 +244,7 @@ def summarize(runs: List[Dict]) -> List[Dict]:
         row.update(_stats([r["unused_budget"] for r in feas], "unused_budget_feas"))
         row.update(_stats([r["objective"] for r in rs], "objective_all"))
         row.update(_stats([r["time_sec"] for r in rs], "time_sec"))
+        row.update(_stats([r["cpu_sec"] for r in rs], "cpu_sec"))
         row.update(_stats([r["n_obj_evals"] for r in rs], "n_obj_evals"))
         rows.append(row)
     return rows

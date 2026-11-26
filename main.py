@@ -26,7 +26,8 @@ import time  # noqa: E402
 from dataclasses import asdict  # noqa: E402
 
 from wsn.config import DEFAULT_CONFIG  # noqa: E402
-from wsn.experiment import read_csv, run_experiments, save_results  # noqa: E402
+from wsn.experiment import (read_csv, run_experiments, save_results, summarize,  # noqa: E402
+                            write_csv)
 from wsn.problem import build_problem  # noqa: E402
 from wsn.visualize import make_all_figures  # noqa: E402
 
@@ -63,8 +64,10 @@ def main(argv=None):
 
     if a.figures_only:
         res = {k: read_csv(os.path.join(a.out, f"{f}.csv")) for k, f in
-               [("runs", "runs"), ("summary", "summary"), ("history", "history"),
+               [("runs", "runs"), ("history", "history"),
                 ("stages", "sqp_stages"), ("positions", "positions")]}
+        res["summary"] = summarize(res["runs"])  # recomputed so summary.csv tracks summarize()
+        write_csv(res["summary"], os.path.join(a.out, "summary.csv"))
     else:
         problem = build_problem(cfg)
         print(f"N={cfg.n_sensors} alpha={cfg.alpha} |P|={len(problem.points)} r_s={cfg.sensing_radius} "
@@ -87,7 +90,7 @@ def main(argv=None):
 
 def print_summary(summary):
     hdr = (f"{'method':<6}{'N':>4}{'alpha':>6}{'b':>5}{'feas':>7}{'J_feas mean+-sd':>20}{'C_feas':>8}"
-           f"{'K_feas':>8}{'B act/near':>11}{'time(s)':>9}{'obj evals':>10}{'conv':>6}  SQP selected beta")
+           f"{'K_feas':>8}{'B act/near':>11}{'cpu(s)':>9}{'obj evals':>10}{'conv':>6}  SQP selected beta")
     print(hdr), print("-" * len(hdr))
     for r in summary:
         J = (f"{r['objective_feas_mean']:+.4f}+-{r['objective_feas_std']:.4f}"
@@ -96,7 +99,7 @@ def print_summary(summary):
         K = f"{r['cost_norm_feas_mean']:.3f}" if r["n_feasible"] else "-"
         print(f"{r['method']:<6}{r['N']:>4}{r['alpha']:>6g}{r['budget_per_sensor']:>5g}"
               f"{r['n_feasible']:>4}/{r['n_runs']:<2}{J:>20}{C:>8}{K:>8}"
-              f"{r['n_budget_active']:>7}/{r['n_budget_near']:<3}{r['time_sec_mean']:>9.2f}"
+              f"{r['n_budget_active']:>7}/{r['n_budget_near']:<3}{r['cpu_sec_mean']:>9.2f}"
               f"{r['n_obj_evals_mean']:>10.0f}{r['n_solver_success']:>4}/{r['n_runs']}"
               f"  {r.get('sqp_selected_beta_counts', '')}")
     print("feas = feasible under the original model (reported solution); B act/near = budget active / "
